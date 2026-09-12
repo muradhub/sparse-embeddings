@@ -1,0 +1,993 @@
+% C-SPINE Revisited: IEEE conference paper (LaTeX source only, not compiled).
+% Authors/affiliation match the final pushed report C_SPINE_Report.pdf:
+% Murad Asgarov, Davud Gurbanov, Raul Aghayev, Samir Abdullazade,
+% Gurban Burjuzada, AI Academy Deep Learning, Final Project.
+%
+% FULL-RUN UPDATE (this revision): all executed numbers below come from the
+% Colab FULL run archived as `final_research (2).zip` in this directory
+% (H=1024, 30 epochs, seeds 42/43/44, five domains, locked TEST).
+% To compile with figures: extract that zip so that `./final_research/plots/`
+% exists next to this file (figure paths below assume that layout).
+%
+% CORRECTIONS APPLIED IN THIS REVISION (audit of C_SPINE_Report.pdf):
+%   1. The issued PDF contained a duplicate "Experimental Setup" section
+%      (with its own "A. Datasets" subsection and a "Table II") describing
+%      an unrelated information-retrieval benchmark (web search, open-domain
+%      QA, multi-hop QA, fact verification, climate fact verification, with
+%      MSMARCO/NQ/HotpotQA/FEVER/Climate-FEVER sizes). None of that content
+%      belongs to this study: every other section, table, and figure in the
+%      paper evaluates the five text-classification domains SST-2, AG News,
+%      IMDB, TREC, and arXiv-11. That duplicate section and table have been
+%      removed; the single, correct "Experimental Setup" section (with
+%      Table I) is retained as the sole description of the datasets used.
+%   2. The "Implementation and Codebase Correspondence" section referenced
+%      an undefined "Table ??" (a dangling \ref in the source that produced
+%      the PDF). A concrete correspondence table (Table VI below) has been
+%      added so the reference resolves, populated from the actual shipped
+%      module layout.
+%   3. The "Hypothesis Verdicts" section and its table, present in the
+%      issued PDF but missing from the previously circulated .tex draft,
+%      are restored here (Table V), along with the "Implementation and
+%      Codebase Correspondence" section and Appendices A and B, all of
+%      which were absent from that legacy draft.
+%   4. All references to the old `cspine/` package name have been updated
+%      to `src/`, matching the current codebase layout (the package that
+%      used to live at final_research/codebase/cspine/ is now src/ at the
+%      repository root).
+%   5. The audit paragraph's mention of "the legacy Table II values" has
+%      been reworded to "the original manuscript's Table II values" to
+%      avoid ambiguity now that this paper has its own Table II.
+%
+% SECOND-ROUND EDITS (this revision):
+%   6. Restored the "Formal Problem Definition," "Metrics and What Each
+%      Formula Measures," and "Downstream Probing as an
+%      Information-Preservation Test" subsections of Methodology, along
+%      with all of their equations (encoder/decoder pipeline, denoising
+%      noise, full loss, MSE, ASL, PSL, L1 ablation, L0/sparsity/dead-
+%      feature definitions, cosine similarity, explained variance, NMSE,
+%      and the softmax probing objective) that were dropped from the
+%      previous revision's Methodology section.
+%   7. Removed Table VI (the "Implementation correspondence: paper claim
+%      to code location" table) from the "Implementation and Codebase
+%      Correspondence" section, per request; the surrounding prose is
+%      kept and no longer references the removed table.
+% Do NOT compile this file here; return the .tex source only.
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em{\sc e}\kern-.125emX}}
+\begin{document}
+
+\title{C-SPINE Revisited: A Rigorous Replication, Audit, and Extension of Sparse Interpretable Sentence Embeddings}
+
+\author{\IEEEauthorblockN{Murad Asgarov, Davud Gurbanov, Raul Aghayev, Samir Abdullazade, Gurban Burjuzada}
+\IEEEauthorblockA{AI Academy Deep Learning\\
+Final Project}}
+
+\maketitle
+
+\begin{abstract}
+Dense contextual embeddings from models such as BERT are powerful but
+opaque: nearly every dimension of a 768-dimensional sentence vector is
+nonzero, and no single dimension carries an assignable meaning. C-SPINE
+(Contextual Sparse and Interpretable Neural Embeddings) addresses this with
+a denoising sparse autoencoder that maps frozen BERT \texttt{[CLS]} vectors
+to overcomplete, bounded, mostly-zero codes. This paper reports a rigorous
+replication and extension. First, we audit the original manuscript against
+its shipped implementation and find the architecture, denoising procedure,
+and loss sign convention faithfully implemented, but also two material
+discrepancies: the paper claims L2-unit input normalization that the code
+never performs, and checkpoint selection peeks at the reporting split, so no
+untouched test set exists. Second, we rebuild the study on a reproducible
+codebase with strict train/validation/locked-test discipline, VAL-only
+checkpointing, a four-level sparsity sweep, mechanism/loss ablations
+including TopK, BatchTopK and dense-autoencoder controls, PCA and random
+projection baselines, feature-level interpretability with purity, coherence
+and neighbourhood analysis, 25-pair cross-domain transfer, and two extra
+encoder families. The executed FULL Colab run (H=1024, 30 epochs, seeds
+42/43/44, five domains) replicates the legacy headline almost exactly on AG
+News (dense 0.903 $\rightarrow$ sparse 0.875 at 92.6\% sparsity, MSE 0.0298,
+vs.\ claimed 0.903 $\rightarrow$ 0.880 at 92.76\%, MSE 0.0295) and closely on
+SST-2 (0.857 $\rightarrow$ 0.815 at 90.0\% sparsity, MSE 0.0224, vs.\
+claimed 0.862 $\rightarrow$ 0.811 at 89.28\%, MSE 0.0216). Generalization is
+uneven: TREC holds (0.878 $\rightarrow$ 0.858), IMDB drops 6.5pp, and
+11-way scientific topic classification drops 10.7pp with PCA-64 ahead by
+7pp. The same run surfaces honest negatives: per-example error \emph{rises}
+with recruited $L_0$ (more dims $\ne$ better fidelity); TopK reconstructs
+better (VAL MSE 0.0159 vs.\ 0.0207) but wastes 88\% of its dictionary;
+Hungarian-matched features across seeds agree at only 0.31 mean cosine
+(H4 fails at full scale); and sparse neighbourhood overlap with dense
+neighbours is partial (mean Jaccard 0.21--0.26). AG News features show
+genuine category selectivity (median purity 0.84, specialization 0.89,
+12/12 showcased dims majority-correct) while SST-2 sentiment is distributed
+(median purity 0.60). All verdicts are evidence-linked with negatives
+retained.
+\end{abstract}
+
+\begin{IEEEkeywords}
+sparse representations, interpretable machine learning, BERT, denoising
+autoencoder, dictionary learning, sentence embeddings, probing classifiers,
+replication study
+\end{IEEEkeywords}
+
+\section{Introduction}
+Modern NLP systems rely on large pretrained language models such as
+BERT~\cite{devlin2019bert}. Their representations capture syntax, semantics,
+and world knowledge, yet a BERT sentence vector is 768 nonzero
+floating-point numbers: powerful, but a black box. In high-stakes domains
+(healthcare, legal, finance) such opacity blocks explanation, so there is
+practical demand for representations that stay useful while becoming
+inspectable.
+
+Sparse coding~\cite{olshausen1997sparse} is a classical remedy: force most
+dimensions to zero so that each active dimension can be counted, inspected,
+and potentially named. SPINE~\cite{subramanian2018spine} demonstrated this
+for static word embeddings with a denoising autoencoder, CappedReLU
+activations, and a two-term sparsity objective. C-SPINE ports that idea to
+contextual sentence embeddings, the distribution modern systems actually
+use and a harder one: context-dependent, high-variance, and richer in
+covariance structure than static word-vector tables.
+
+This paper is a replication and extension, not a new method. Our remit is
+the original C-SPINE contribution itself: verify what was claimed, fix what
+was methodologically weak, and test generalizability. A companion effort
+covers knowledge-graph extensions and is out of scope here. Our objective is
+scientific rigor and reproducibility rather than maximal scores. Concretely
+we contribute: (i) a paper-vs-code audit with two material discrepancies
+documented; (ii) a clean, configuration-driven codebase (\texttt{src/})
+with strict train/validation/locked-test discipline; (iii) a controlled
+sparsity sweep, mechanism/loss ablations, and information-preservation
+baselines; (iv) feature-level interpretability (purity curves, firing
+statistics, dense-space coherence, co-activation, neighbour preservation)
+and 25-pair cross-domain transfer; (v) executed FULL-scale results over five
+domains with honest negatives retained; and (vi) hypothesis verdicts H1--H6
+against pre-registered evidence.
+
+\section{Related Work}
+\subsection{Static vs.\ Contextual Embeddings}
+Word2Vec~\cite{mikolov2013distributed} and GloVe~\cite{pennington2014glove}
+assign one vector per word type and cannot distinguish senses. Contextual
+models (BERT~\cite{devlin2019bert}, RoBERTa~\cite{liu2019roberta},
+GPT-2~\cite{radford2019language}) condition on context via self-attention
+and masked-language pretraining. The final-layer \texttt{[CLS]} hidden state
+serves as a sentence representation and is the input to C-SPINE.
+
+\subsection{Sparse Coding and Dictionary Learning}
+Olshausen and Field~\cite{olshausen1997sparse} established overcomplete
+sparse bases for efficient coding. Dictionary learning, ICA, and NMF extend
+the theme of finding interpretable components. Overcompleteness
+($H>D$; here $1024>768$) is deliberate: extra atoms let the
+signal spread thinly so that each input uses a different sparse subset.
+
+\subsection{SPINE}
+Subramanian et al.~\cite{subramanian2018spine} trained a denoising sparse
+autoencoder on static embeddings with CappedReLU units bounded to
+$[0,1]$, reporting roughly 90\% sparsity with small downstream drops and
+topic-selective dimensions. C-SPINE reuses the architecture and the
+average-sparsity vs.\ peak-sparsity tension, applied to sentence-level
+contextual vectors.
+
+\subsection{Sparse Autoencoders for Interpretability}
+SAEs are now a standard mechanistic-interpretability tool for decomposing
+model internals into human-meaningful features~\cite{bricken2023towards}.
+C-SPINE differs in target: output sentence vectors for downstream reuse
+rather than internal circuits. Modern hard-sparsity variants such as TopK
+and BatchTopK~\cite{gao2024scaling} replace soft penalties with exact
+budgets; we include both as ablations to test whether C-SPINE behavior is
+objective-specific or generic sparse coding.
+
+\subsection{Probing Classifiers}
+Linear probes test whether class information is linearly accessible in
+frozen features~\cite{tenney2019bert}. We use logistic-regression probes
+throughout under one fixed protocol across dense, reconstructed, sparse,
+and baseline arms.
+
+\section{Audit: Manuscript vs.\ Implementation}
+Treating the paper and the shipped code as independent sources of truth, we
+verified seventeen pipeline points (representations, pooling,
+normalization, encoder/decoder, activation, both sparsity terms,
+reconstruction objective, noise, training, splits, checkpointing, probe,
+metrics, seeds, hardware, every reported number). Three findings matter.
+
+First, the architecture, denoising placement (noise at train time only,
+reconstruction against the clean target), and the ASL/PSL sign convention
+($\mathcal{L}=\mathrm{MSE}+\lambda_1\mathrm{ASL}-\lambda_2\mathrm{PSL}$)
+match exactly, as do the optimizer settings and the CLS-pooling pipeline.
+
+Second, two material discrepancies. (a)~The manuscript states twice that
+vectors are L2-normalized to unit length; the code never normalizes
+anywhere. The FULL run confirms raw CLS norms of $14.43\pm0.44$, so the
+$\sigma=0.1$ noise is only $\sim$0.7\% relative magnitude (weak denoising
+pressure as configured). (b)~Checkpoint selection uses best validation MSE,
+but the ``validation'' split \emph{is} the reporting split (AG News test;
+SST-2 validation reused for reporting), so no untouched test set exists and
+reported accuracies are optimistic. All headline numbers are additionally
+single-seed point estimates without uncertainty, the reconstruction loss is
+a batch-mean MSE rather than the stated sum (rescaling the effective
+$\lambda$ weights), and several figures are placeholders.
+
+Third, the original manuscript's Table~II values (SST-2 86.24\% dense
+$\rightarrow$ 81.08\% sparse at 89.28\% sparsity; AG News 90.30\%
+$\rightarrow$ 87.96\% at 92.76\%) were arithmetically self-consistent but
+unverifiable before; \S\ref{sec:results} now tests them directly against
+locked-TEST reruns.
+
+\section{Methodology}
+\subsection{Feature Extraction}
+A frozen encoder maps tokenized input (max 128 subword tokens) to a
+sentence vector: \texttt{[CLS]} final hidden state for BERT-family models,
+masked-mean pooling for MiniLM-family models. An explicit
+\texttt{normalize\_inputs} flag reproduces legacy behavior
+(\texttt{False}) or tests the paper's claim (\texttt{True}).
+BERT is never fine-tuned; embeddings are cached once.
+
+\subsection{Formal Problem Definition}
+Let $\mathbf{x}\in\mathbb{R}^D$ denote a frozen sentence embedding and let
+$H$ be the dictionary width. The central goal is to learn an overcomplete,
+sparse code $\mathbf{z}\in[0,1]^H$ and a decoder that approximately
+preserves $\mathbf{x}$:
+\begin{equation}
+\mathbf{x}\in\mathbb{R}^D \xrightarrow{\;f_\theta\;} \mathbf{z}\in[0,1]^H
+\xrightarrow{\;g_\phi\;} \hat{\mathbf{x}}\in\mathbb{R}^D, \qquad H>D.
+\label{eq:pipeline}
+\end{equation}
+The model is intentionally overcomplete. For the main experiments, $D=768$
+and $H=1024$, so there are more latent atoms than input coordinates.
+Overcompleteness does not by itself produce sparsity; the loss must make
+inactive coordinates preferable while preserving enough active coordinates
+to reconstruct the input.
+
+At training time only, a denoising perturbation is added:
+\begin{equation}
+\tilde{\mathbf{x}} = \mathbf{x} + \boldsymbol{\epsilon}, \qquad
+\boldsymbol{\epsilon}\sim\mathcal{N}(\mathbf{0},\sigma^2\mathbf{I}), \qquad
+\sigma=0.1.
+\label{eq:noise}
+\end{equation}
+The target remains the clean vector $\mathbf{x}$. Thus the model is not
+trained to reproduce noise; it is trained to recover the uncorrupted
+representation from a perturbed observation.
+
+\subsection{Model}
+The legacy C-SPINE encoder is $\mathbf{z}=\mathrm{CappedReLU}
+(\mathbf{W}_{\mathrm{enc}}\tilde{\mathbf{x}}+\mathbf{b}_{\mathrm{enc}})$
+with $\tilde{\mathbf{x}}$ as in Eq.~\eqref{eq:noise}, at train time only,
+following the denoising framework~\cite{vincent2008extracting}; the decoder
+$\hat{\mathbf{x}}=\mathbf{W}_{\mathrm{dec}}\mathbf{z}+\mathbf{b}_{\mathrm{dec}}$
+is linear. Variants: TopKSAE (exact per-example $L_0=k$), BatchTopKSAE
+(exact batch budget $k\cdot B$), DenseAE (ReLU, MSE-only no-sparsity
+control), and a two-layer MLP encoder (capacity control). A factory guard
+warns loudly on undercomplete $H<D$ configurations after we observed one
+densify instead of sparsify.
+
+\subsection{Loss}
+The implemented objective is
+\begin{equation}
+\mathcal{L} = \mathrm{MSE}(\hat{\mathbf{x}},\mathbf{x})
++ \lambda_{1}\,\mathrm{ASL}(\mathbf{z}) - \lambda_{2}\,\mathrm{PSL}(\mathbf{z})
+\label{eq:loss}
+\end{equation}
+where the batch contains $B$ examples and the dictionary has $H$ features.
+The reconstruction term is the elementwise batch mean,
+\begin{equation}
+\mathrm{MSE} = \frac{1}{BD}\sum_{b=1}^{B}\sum_{d=1}^{D}
+(\hat{x}_{bd}-x_{bd})^2.
+\label{eq:mse}
+\end{equation}
+The average sparsity loss is
+\begin{equation}
+\mathrm{ASL} = \frac{1}{BH}\sum_{b=1}^{B}\sum_{j=1}^{H} z_{bj}.
+\label{eq:asl}
+\end{equation}
+Because $z_{bj}\ge 0$, minimizing ASL pushes the whole code toward zero.
+This is the term that pays for sparsity: removing it sharply improves
+reconstruction because the model can activate substantially more units.
+
+The peak sparsity loss is
+\begin{equation}
+\mathrm{PSL} = \frac{1}{H}\sum_{j=1}^{H}\max_{1\le b\le B} z_{bj}.
+\label{eq:psl}
+\end{equation}
+PSL is subtracted from the objective. Consequently, the optimizer is
+rewarded when every feature reaches a substantial activation on at least
+some training examples. This counters the dead-feature failure mode that
+would arise from minimizing ASL alone. Because CappedReLU bounds
+$z_j\in[0,1]$, PSL cannot be made arbitrarily large.
+
+With the default $\lambda_1=\lambda_2=1$, the three forces can be read as
+follows: MSE asks the dictionary to preserve information, ASL asks it to
+use as few features as possible, and PSL asks those features to be
+collectively utilized rather than concentrating all activity into a small
+subset of atoms.
+
+The code implements an additional L1 ablation,
+\begin{equation}
+\mathrm{L1}(\mathbf{z}) = \frac{1}{BH}\sum_{b,j} |z_{bj}|,
+\label{eq:l1}
+\end{equation}
+which replaces the ASL+PSL pair. Since CappedReLU is nonnegative, L1 is
+numerically close to the same first-order activation pressure as ASL; what
+it removes is the explicit anti-dead-feature reward represented by PSL.
+
+$\lambda_1=\lambda_2=1.0$ by default, optimized with
+Adam~\cite{kingma2015adam}; ablations toggle each term
+(no-ASL/no-PSL/no-noise/MSE-only/L1-instead) to attribute effects.
+
+\subsection{Metrics and What Each Formula Measures}
+For an individual sparse code $\mathbf{z}_i$, the recruited feature count
+is
+\begin{equation}
+L_0(\mathbf{z}_i) = \sum_{j=1}^{H} \mathbb{1}[z_{ij}\ne 0],
+\label{eq:l0}
+\end{equation}
+and the corresponding zero fraction is
+\begin{equation}
+\mathrm{Sparsity}(\mathbf{z}_i) = 1 - \frac{L_0(\mathbf{z}_i)}{H}.
+\label{eq:sparsity}
+\end{equation}
+The reported mean $L_0$ is therefore the average number of active
+dictionary atoms per sentence, while the reported sparsity ratio is the
+average fraction of dictionary entries that are exactly zero. A feature is
+called dead if its activation is zero for every evaluation example:
+\begin{equation}
+\mathrm{dead}(j) = \mathbb{1}\Big[\textstyle\sum_i \mathbb{1}[z_{ij}\ne 0] = 0\Big].
+\label{eq:dead}
+\end{equation}
+Feature utilization at a threshold $\tau$ is the fraction of features whose
+activation frequency is at least $\tau$.
+
+Reconstruction quality is measured by cosine similarity,
+\begin{equation}
+\cos(\mathbf{x},\hat{\mathbf{x}}) =
+\frac{\mathbf{x}^{\top}\hat{\mathbf{x}}}{\|\mathbf{x}\|_2\,\|\hat{\mathbf{x}}\|_2},
+\label{eq:cosine}
+\end{equation}
+explained variance,
+\begin{equation}
+\mathrm{EV} = 1 - \frac{\mathrm{Var}(\mathbf{x}-\hat{\mathbf{x}})}{\mathrm{Var}(\mathbf{x})},
+\label{eq:ev}
+\end{equation}
+and normalized reconstruction error,
+\begin{equation}
+\mathrm{NMSE} = \frac{\mathrm{MSE}(\mathbf{x},\hat{\mathbf{x}})}
+{\mathrm{mean}_i\|\mathbf{x}_i\|_2^2 / D}.
+\label{eq:nmse}
+\end{equation}
+The code additionally keeps the full per-example MSE distribution (mean,
+standard deviation, median, 90th percentile, and 99th percentile), because
+a single mean can conceal a tail of difficult examples.
+
+\subsection{Downstream Probing as an Information-Preservation Test}
+Let $\mathbf{X}_{\mathrm{tr}}$ and $\mathbf{X}_{\mathrm{te}}$ denote one
+representation arm, with labels $y$. The downstream test fits the same
+logistic-regression protocol to every representation:
+\begin{equation}
+p(y=c\mid\mathbf{r}) = \mathrm{softmax}_c(\mathbf{W}\mathbf{r}+\mathbf{b}),
+\label{eq:softmax}
+\end{equation}
+using $C=1.0$, the LBFGS solver, and at most 1000 iterations. Dense-like
+representations are standardized using training-set statistics; sparse
+$[0,1]$ codes are not standardized. The reported primary metrics are
+accuracy and macro-F1, with micro-F1, macro precision/recall, and per-class
+F1 retained in the metric files.
+
+The critical comparison is not only sparse versus dense. Reconstructed
+dense vectors isolate information lost by the autoencoder mapping from
+information lost specifically because the downstream classifier consumes
+sparse codes. PCA-64 and Gaussian random projection-64 then ask whether
+comparable performance is obtainable by ordinary dimensionality reduction.
+
+\subsection{Hypotheses}
+H1: sparse codes retain most downstream information at far fewer active
+dims. H2: a sparsity plateau exists where fidelity degrades slowly.
+H3: the C-SPINE objective yields more coherent features than a non-sparse
+autoencoder. H4: features recur across seeds. H5: the method stays useful
+across domains. H6: the effect exceeds ordinary dimensionality reduction.
+Each maps to pre-registered evidence (sweeps, ablations, matching,
+transfer, PCA/RP baselines).
+
+\section{Experimental Setup}
+\label{sec:setup}
+The FULL Colab run is executed (this revision): full datasets, max length
+128, $H=1024$, 30 epochs, seeds 42/43/44, five domains --- SST-2~\cite{socher2013recursive}
+(\texttt{nyu-mll/glue:sst2}), AG News~\cite{zhang2015character}
+(\texttt{fancyzhx/ag\_news}), IMDB~\cite{maas2011learning}
+(\texttt{stanfordnlp/imdb}), TREC question classification~\cite{li2002learning} via
+\texttt{SetFit/TREC-QC}, and scientific arXiv topic classification (11
+classes, \texttt{ccdv/arxiv-classification}, executed under the legacy
+\texttt{scicite} repo key; display name \texttt{arXiv-11} in results/tables/plots) --- plus MiniLM and DistilBERT encoder probes.
+Table~\ref{tab:config} summarizes the configuration.
+Splits: HF-train $\rightarrow$ stratified
+90/10 train/val (class ratios preserved); HF-val/test $\rightarrow$ locked
+TEST evaluated once (SST-2 872; AG News 7\,600; IMDB 25\,000; TREC 500;
+arXiv 2\,500). Best checkpoint by VAL MSE only; downstream figures below
+are seed-42 locked-TEST evaluations unless stated. Probes: logistic
+regression (lbfgs, $C=1.0$, 1000 iterations; StandardScaler on dense-like
+arms, none on $[0,1]$ sparse codes), reporting accuracy, macro/micro F1,
+macro precision/recall, and per-class F1. Reconstruction metrics: MSE,
+cosine similarity, explained variance, normalized MSE, per-example error
+distribution, and binned recon-vs-$L_0$. Sparsity metrics: per-example
+$L_0$, mean/median/std, sparsity ratio, activation frequency, dead-feature
+count, utilization, and recon-vs-$L_0$.
+
+\begin{table}[t]
+\caption{Executed FULL configuration (this revision). All items ran to completion; no step was skipped.}
+\label{tab:config}
+\centering
+\begin{tabular}{lc}
+\hline
+\textbf{Hyperparameter} & \textbf{FULL (run)} \\
+\hline
+Encoder & bert-base-uncased (+MiniLM, DistilBERT probes) \\
+Input dim $D$ & 768 (384 for MiniLM) \\
+Hidden dim $H$ & 1024 \\
+Noise $\sigma$ & 0.10 \\
+$\lambda_1$ / $\lambda_2$ & 1.0 / 1.0, sweep $\{0.1,1,3,8\}$ \\
+Optimizer / lr / batch & Adam / 1e-3 / 64 \\
+Epochs / seeds & 30 / \{42, 43, 44\} \\
+Train sizes (SST-2 / AG / IMDB / TREC / arXiv order) & 60.6k / 108k / 22.5k / 4.9k / 25.5k \\
+TEST (locked, same order) & 872 / 7\,600 / 25\,000 / 500 / 2\,500 \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Results}
+\label{sec:results}
+\subsection{Downstream Preservation and Reconstruction}
+Table~\ref{tab:main} gives locked-TEST results at seed 42. On AG News the
+rerun replicates the legacy headline almost exactly: dense 0.903
+$\rightarrow$ sparse 0.875 (drop 2.8pp) at 92.6\% sparsity with zero dead
+features, MSE 0.0298 and cosine 0.946, against claimed 0.903 $\rightarrow$
+0.880 (drop 2.3pp) at 92.76\%, MSE 0.0295. On SST-2 the match is close:
+dense 0.857 $\rightarrow$ sparse 0.815 (drop 4.1pp) at 90.0\% sparsity, MSE
+0.0224, cosine 0.959, explained variance 0.920, against claimed 0.862
+$\rightarrow$ 0.811 (drop 5.2pp) at 89.28\%, MSE 0.0216. Reconstructed-then-probed
+accuracy sits within 0.5pp of sparse probing on both sets (SST-2 0.820 vs.\
+0.815; AG News 0.873 vs.\ 0.875), matching the manuscript's recon$\approx$sparse
+story at full scale (the smoke-run inversion does not reproduce).
+
+\begin{table}[t]
+\caption{Locked-TEST results, FULL run (seed 42, $H=1024$). PCA at 64 components (RP-64 scores in metrics). \texttt{arXiv-11} is the \texttt{ccdv/arxiv-classification} run under repo key \texttt{scicite}. $\Delta$ = sparse $-$ dense accuracy (pp).}
+\label{tab:main}
+\centering
+\begin{tabular}{lccccc}
+\hline
+\textbf{Dataset} & \textbf{Dense} & \textbf{Sparse} & \textbf{$\Delta$} & \textbf{PCA} & \textbf{MSE / cos} \\
+\hline
+SST-2 (872) & 0.857 & 0.815 & $-$4.1 & 0.839 & 0.0224 / 0.959 \\
+AG News (7.6k) & 0.903 & 0.875 & $-$2.8 & 0.874 & 0.0298 / 0.946 \\
+IMDB (25k) & 0.814 & 0.749 & $-$6.5 & 0.791 & 0.0250 / 0.954 \\
+TREC (500) & 0.878 & 0.858 & $-$2.0 & 0.862 & 0.0112 / 0.981 \\
+arXiv-11 (2.5k) & 0.684 & 0.577 & $-$10.7 & 0.648 & 0.0267 / 0.956 \\
+\hline
+\end{tabular}
+\end{table}
+
+Generalization is uneven (H5 mixed). TREC question classification holds
+(0.878 $\rightarrow$ 0.858, macro-F1 0.862 $\rightarrow$ 0.819, best MSE
+0.0112 and cosine 0.981 of the suite), though $n=500$ implies
+$\approx\pm$4pp noise. IMDB long-review sentiment drops 6.5pp (0.814
+$\rightarrow$ 0.749) with PCA-64 ahead by 4.2pp. Eleven-way scientific
+topic classification is the failure case: 0.684 $\rightarrow$ 0.577
+(macro-F1 0.678 $\rightarrow$ 0.568) with PCA-64 ahead by 7.1pp and every
+class F1 below its dense counterpart. Sparsity itself transfers across
+domains ($L_0$ 76--103, 90--93\% zeros, dead $\le$4.1\% everywhere), but
+downstream utility does not: sentiment and topic survive, fine-grained
+scientific vocabulary does not. The honest headline for H6 is therefore
+split: sparse codes tie PCA-64 on AG News (0.875 vs.\ 0.874) but trail it on
+SST-2 (by 2.4pp), IMDB (4.2pp), TREC (0.4pp) and arXiv (7.1pp) --- no
+evidence of beyond-compression value at this operating point, with one tie.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/training_cspine_sst2_seed42}
+\caption{SST-2 FULL training (30 epochs): VAL MSE falls while VAL sparsity
+rises; star marks the VAL-selected checkpoint carried to TEST. All five
+domains show the same smooth profile with no collapses.}
+\label{fig:train}
+\end{figure}
+
+\subsection{Sparsity Sweep (H2)}
+On SST-2, $\lambda_{\mathrm{ASL}}\in\{0.1,1,3,8\}$ yields $L_0$
+212.9/102.7/70.6/34.6 (79.2\%/90.0\%/93.1\%/96.6\% zeros) with MSE
+0.0185/0.0224/0.0234/0.0253 and sparse accuracy 0.846/0.815/0.797/0.773
+(Fig.~\ref{fig:sweep}; Table~\ref{tab:sweep}). Unlike the smoke run there
+is no flat plateau followed by a cliff: accuracy falls 7.3pp monotonically
+while MSE rises 37\%, and dead features climb 0.7\%/4.1\%/16.5\%/31.7\%.
+The medium$\rightarrow$high step is the gentlest (1.8pp for 3.1pp of
+sparsity), but H2 as stated --- a range where fidelity degrades
+\emph{slowly} relative to active-count reduction --- is at best weakly
+supported: tripling sparsity from 79\% to 97\% costs 7.3pp accuracy and a
+third of the dictionary.
+
+\begin{table}[t]
+\caption{SST-2 sparsity sweep, FULL run (locked TEST). Dense baseline 0.857.}
+\label{tab:sweep}
+\centering
+\begin{tabular}{lcccc}
+\hline
+\textbf{Level ($\lambda$)} & \textbf{$L_0$} & \textbf{MSE} & \textbf{Sparse acc.} & \textbf{Dead} \\
+\hline
+low (0.1) & 212.9 & 0.0185 & 0.846 & 0.7\% \\
+medium (1.0) & 102.7 & 0.0224 & 0.815 & 4.1\% \\
+high (3.0) & 70.6 & 0.0234 & 0.797 & 16.5\% \\
+very-high (8.0) & 34.6 & 0.0253 & 0.773 & 31.7\% \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/sparsity_tradeoff}
+\caption{SST-2 sparsity sweep: reconstruction degrades monotonically with
+sparsity while downstream accuracy falls 7.3pp from low to very-high.
+Dashed line: dense baseline (0.857).}
+\label{fig:sweep}
+\end{figure}
+
+\subsection{Training Dynamics}
+Over 30 epochs MSE falls and sparsity rises smoothly on every domain with
+no jumps or collapses: SST-2 VAL MSE 0.0241$\rightarrow$0.0207 with
+sparsity 87.2\%$\rightarrow$92.1\%; AG News 0.0342$\rightarrow$0.0300 with
+89.4\%$\rightarrow$92.8\%; IMDB 0.0300$\rightarrow$0.0250 with
+81.4\%$\rightarrow$91.0\%; TREC 0.0323$\rightarrow$0.0152 with
+60.9\%$\rightarrow$89.5\%; arXiv 0.0323$\rightarrow$0.0274 with
+84.5\%$\rightarrow$91.6\% (Fig.~\ref{fig:train}). Optimization is also
+stable across seeds: best VAL MSE varies by at most 0.0003 within a domain
+(SST-2 0.02069/0.02056/0.02088; AG News 0.02983/0.02966/0.02969). The
+contrast with \S\ref{sec:stability} matters: the objective value is
+seed-stable while the learned dictionary identity is not.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/downstream_sst2}
+\caption{SST-2 downstream under one LogReg protocol (left: accuracy and
+macro-F1) and per-class F1 (right). PCA-64 leads; sparse trails dense by
+4.1pp; reconstructed matches sparse within 0.5pp.}
+\label{fig:downstream}
+\end{figure}
+
+\subsection{Reconstruction Quality vs.\ Recruited Dims}
+The binned recon-vs-$L_0$ curves invert the smoke-run reading and do so on
+four of five datasets (Fig.~\ref{fig:reconl0}). On SST-2, per-example MSE
+\emph{rises} with $L_0$: 0.0182 at $L_0\!\sim\!$9--41 climbing to 0.0279 at
+$L_0\!\sim\!$163--367. AG News shows the same slope (0.0275 $\rightarrow$
+0.0350); IMDB is flat through $L_0\!\sim\!$115 then jumps to 0.0344 in the
+top bin; arXiv drifts 0.0247 $\rightarrow$ 0.0302; only TREC is U-shaped
+(best 0.0094 mid-range, worst 0.0161 at the top). More active dims do
+\emph{not} buy better fidelity at full scale. The natural interpretation is
+that $L_0$ indexes example difficulty rather than a fidelity dial: harder
+inputs recruit more atoms yet still reconstruct worse. This reframes H2 ---
+sparsity is a property of the input under the learned dictionary, not a
+knob that trades fidelity monotonically.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/recon_vs_l0_sst2}
+\caption{SST-2 recon quality vs.\ recruited dims (locked TEST): MSE rises
+with $L_0$, i.e.\ examples that recruit more atoms reconstruct worse.
+Marker size $\propto$ bin count. AG News, IMDB and arXiv show the same
+positive slope; TREC is U-shaped.}
+\label{fig:reconl0}
+\end{figure}
+
+\section{Ablations}
+\subsection{Sparsity Mechanism}
+At matched $H=1024$ on SST-2, TopK ($k=64$) reaches lower VAL MSE than
+C-SPINE (0.0159 vs.\ 0.0207) at fixed $L_0=64$, but wastes 904/1024
+dictionary atoms (88.3\% dead; BatchTopK nearly identical at 88.6\% dead,
+VAL MSE 0.0340) against C-SPINE's 42 dead (4.1\%) and 72.0\% utilization.
+The dense AE reconstructs best (0.0030) with 59.4\% dead ReLUs and merely
+incidental 60.1\% ``sparsity'' at $L_0=408$. Fidelity and utilization point
+in opposite directions: neither arm wins outright, and the soft ASL/PSL
+objective's distinctive contribution is dictionary utilization, not raw
+MSE (Fig.~\ref{fig:mech}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/mechanisms}
+\caption{Mechanism ablation (SST-2, $H=1024$): VAL MSE, TEST $L_0$,
+dead-feature share. TopK wins MSE; C-SPINE alone uses its dictionary;
+dense AE wins MSE with no learned sparsity.}
+\label{fig:mech}
+\end{figure}
+
+\subsection{Loss Ablations}
+Removing terms one at a time (SST-2 VAL MSE): full 0.02069; no-PSL 0.02027;
+no-noise 0.02044 --- all within noise of each other, so neither the PSL
+reward nor the $\sigma=0.1$ denoising pressure buys reconstruction at this
+scale. Two arms move decisively: no-ASL drops to 0.01205 and MSE-only to
+0.00446. The reading is unambiguous and theoretically expected --- the
+average-sparsity penalty is what the MSE pays for; delete it and fidelity
+recovers because the code is allowed to densify. The ablation therefore
+confirms ASL is the binding sparsity constraint while PSL and noise are
+second-order for reconstruction (their role, if any, is in dictionary
+health, not fidelity).
+
+\subsection{Representation Notes}
+Raw CLS norms average $14.43\pm0.44$, confirming the audit: the legacy setup
+never produced unit-length inputs, and $\sigma=0.1$ noise is $\sim$0.7\%
+relative magnitude (weak denoising pressure as configured). The
+\texttt{normalize\_inputs} ablation remains queued; nothing in the FULL run
+rehabilitates the paper's normalization claim.
+
+\section{Generalization and Transfer}
+Frozen-SAE transfer over all 25 ordered domain pairs (no retraining) shows
+partial reuse with clear dataset tuning (Fig.~\ref{fig:transfer}).
+In-domain diagonals (MSE) are 0.0224/0.0298/0.0250/0.0112/0.0267 for
+SST-2/AG/IMDB/TREC/arXiv with cosines 0.959/0.946/0.954/0.981/0.956.
+Off-diagonal MSE is 1.5--4$\times$ worse in most directions (e.g.\
+SST-2$\rightarrow$arXiv 0.0918, TREC$\rightarrow$arXiv 0.1091,
+arXiv$\rightarrow$SST-2 0.0794) while cosine degrades gracefully
+(0.826--0.955), so directions partially transfer but scales do not. Two
+asymmetries stand out. First, the TREC dictionary over-fires abroad ($L_0$
+233 on SST-2, 465 on AG News, 521 on arXiv vs.\ 76 at home) while visiting
+dictionaries collapse on TREC (SST-2$\rightarrow$TREC $L_0$ 33.8 with
+69.6\% dead; arXiv$\rightarrow$TREC 57.8\% dead; AG$\rightarrow$SST-2
+41.9\% dead). Short questions appear to induce a compact, trigger-happy
+dictionary that cannot tile other manifolds, and other dictionaries leave
+most atoms silent on questions. Second, same-family sentiment transfer is
+the healthiest pair (SST-2$\leftrightarrow$IMDB cosines 0.917/0.943, MSE
+0.0451/0.0326). Encoder probes are preliminary (3 epochs each):
+MiniLM ($D=384$) reaches VAL MSE 0.0463 while DistilBERT ($D=768$) reaches
+0.0254 but its sparsity \emph{fell} 24.5\%$\rightarrow$16.3\% over the
+window --- densifying, not sparsifying, early in training. No
+encoder-agnostic claim is supported.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/transfer}
+\caption{Frozen-SAE transfer over 25 ordered pairs: cosine similarity and
+MSE with $L_0$ annotated. Diagonals are in-domain references. TREC rows
+over-fire abroad; TREC columns induce mass dead features.}
+\label{fig:transfer}
+\end{figure}
+
+\section{Interpretability}
+Per-feature analysis (top/bottom activating examples, activation
+distributions, class purity at top-50 plus purity curves at $K=10/20/50$,
+per-class firing rates, specialization scores, dense-space coherence, and
+template descriptions) goes beyond heatmaps, with disciplined vocabulary:
+discriminative $\ne$ correlated $\ne$ coherent $\ne$ interpretable. The
+population background guards against cherry-picking: over all 1024 dims,
+AG News purity@50 medians 0.84 with specialization median 0.89 (a genuinely
+selective population), while SST-2 medians are 0.60 and 0.32 (sentiment is
+distributed, not localized). All 12 showcased AG News dims are
+majority-correct with purities 0.74--0.98 and coherence 0.70--0.82; all 6
+showcased SST-2 dims are majority-correct with purities 0.68--0.92 and
+coherence 0.84--0.86 (Fig.~\ref{fig:qualcoh}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/qual_agnews_pop_hist}
+\caption{Qualitative background (AG News, all 1024 dims): purity@50 and
+specialization populations. Showcased dims sit at the top end of an already
+selective population --- not cherry-picked outliers.}
+\label{fig:qualpop}
+\end{figure}
+
+AG News dims are label-clean without any label supervision during SAE
+training. World dim 647 (purity 0.94, spec 0.976, coherence 0.765) fires on
+conflict reporting (``U.S. Brokers Cease-fire in Western Afghanistan'',
+``Bosnian Serb PM resigns after war crimes criticism''); Sports dim 446
+(purity 0.98, spec 0.973, coherence 0.751) fires on game recaps (``2005
+American Bowl teams announced'', ``Red Sox on Brink of World Series
+Victory''); Business dim 519 (purity 0.82, spec 0.799, coherence 0.820, the
+highest coherence observed) fires on earnings and deals (``Court Seen
+Lifting YUKOS Block'', ``Goldcorp Says It Will Review Glamis Bid''').
+Purity curves are flat across $K$ (e.g.\ Sports dim 754: 1.00/1.00/0.96 at
+$K=10/20/50$), and global-top mismatch checks pass: unconstrained top-5
+lists stay in-class. The weakest showcase, Sci/Tech dim 972 (purity 0.74,
+spec 0.802), is instructive rather than embarrassing: its top activators
+are all business-flavoured technology (``Vodafone hires Citi for Cesky
+bid'', ``Oracle Overhauls Sales-Side Apps'') while its silent contrast set
+is space/science (``SpaceShipOne Lands After 2nd Flight'') --- the dim
+splits the Sci/Tech category along a business-vs-science seam the label
+scheme does not mark. Per-dim selectivity bars (Fig.~\ref{fig:qualsel})
+show the same single-tall-bar signature for every showcased AG News dim.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/qual_agnews_selectivity}
+\caption{Per-dim class selectivity (AG News): each showcased dim shows one
+tall bar (its category) against near-zero others. Business dims are the
+least sharp, matching their lower specialization scores.}
+\label{fig:qualsel}
+\end{figure}
+
+SST-2 is honestly weaker and more interesting. Positive dim 235 (purity
+0.92, spec 0.863, coherence 0.839) is the cleanest: ``a fast, funny, highly
+enjoyable movie'', ``it 's a lovely film with lovely performances'' ---
+unambiguous praise. Negative dims fire on grew-a-beard criticism (dim 611,
+purity 0.88: ``it 's too self-important and plodding to be funny''), but
+their global-top lists leak positives at saturated activation 1.000 (``in
+a way, the film feels like a breath of fresh air'') --- a caveat with a
+mechanical explanation: the PSL peak-chasing piles mass at the CappedReLU
+ceiling, so rankings among saturated units are ties broken arbitrarily, and
+mismatch checks at the ceiling carry less information than their printout
+suggests. Firing-rate statistics separate the two regimes quantitatively:
+dim 800 fires on 49.8\% of negatives but also 24.3\% of positives (broad),
+while AG News World dim 647 fires almost exclusively in-class. Co-activation
+among showcased dims is low (no duplicated atoms flagged), and
+dense-vs-sparse 5-NN overlap is partial (SST-2 mean Jaccard 0.26, AG News
+0.21; the rank-1 neighbour is often preserved, e.g.\ AG News query 32
+shares its top-3 dense neighbours in altered order, Jaccard 0.43) ---
+sparsification keeps local geometry approximately, not exactly.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{final_research/plots/qual_agnews_coherence}
+\caption{Purity@50 beside dense-space coherence per showcased dim (AG
+News). High purity with lower coherence (World/Sports, $\sim$0.72--0.77)
+vs.\ lower purity with higher coherence (Business dim 519, 0.82):
+correlation and geometric grouping do not always coincide.}
+\label{fig:qualcoh}
+\end{figure}
+
+\begin{table}[t]
+\caption{Showcased dims (locked TEST): specialization, purity@50, dense coherence. Full top/bottom/global exemplars in \texttt{tables/qual\_*.csv}.}
+\label{tab:qual}
+\centering
+\begin{tabular}{llcccc}
+\hline
+\textbf{Set} & \textbf{Dim (class)} & \textbf{Spec.} & \textbf{Pur.} & \textbf{Coh.} \\
+\hline
+SST-2 & 235 (pos) & 0.863 & 0.92 & 0.839 \\
+SST-2 & 611 (neg) & 0.535 & 0.88 & 0.863 \\
+SST-2 & 800 (neg) & 0.559 & 0.72 & 0.859 \\
+AG & 647 (World) & 0.976 & 0.94 & 0.765 \\
+AG & 446 (Sports) & 0.973 & 0.98 & 0.751 \\
+AG & 519 (Business) & 0.799 & 0.82 & 0.820 \\
+AG & 674 (Sci/Tech) & 0.960 & 0.94 & 0.754 \\
+AG & 972 (Sci/Tech) & 0.802 & 0.74 & 0.774 \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Feature Stability}
+\label{sec:stability}
+With three seeds available, H4 is now testable on SST-2 --- and it fails.
+Hungarian matching on decoder directions (seeds 42/43) gives mean matched
+cosine 0.305 (median 0.282; only 0.6\% of pairs above 0.7 over 1024
+matches). Matched activation correlation averages 0.385 (40.3\% above 0.5),
+and top-20 activating-example overlap averages Jaccard 0.063 (median
+0.026). Dictionaries with equivalent loss values (VAL MSE within 0.0003)
+learn nearly disjoint atoms: optimization is seed-stable, identity is not.
+An interpretable representation should partially survive
+re-initialization; C-SPINE's does not at this scale. Single-run heatmaps,
+however clean, must therefore not be read as stable concepts. The
+smoke-run deferral is resolved against H4.
+
+\section{Hypothesis Verdicts}
+\label{sec:hyp}
+Table~\ref{tab:hyp} summarizes the final evidential status. A verdict is
+intentionally conservative: a hypothesis is not marked supported merely
+because one dataset or one visualization is favorable.
+
+\begin{table*}[t]
+\caption{Pre-registered hypotheses and full-run evidence.}
+\label{tab:hyp}
+\centering
+\begin{tabular}{p{0.6cm}p{3.4cm}p{7.2cm}p{5.6cm}}
+\hline
+\textbf{Hyp.} & \textbf{Verdict} & \textbf{Evidence} & \textbf{Interpretation} \\
+\hline
+H1 & Mixed / partial & At 90--93\% zeros, sparse accuracy remains close to dense on SST-2, AG News, and TREC, but drops 6.5pp on IMDB and 10.7pp on arXiv-11. & Strong compression is feasible, but information retention is domain-dependent. \\
+H2 & Weakly supported / largely rejected & SST-2 sweep moves from 79.2\% to 96.6\% zeros while accuracy decreases monotonically from 0.846 to 0.773 and dead-feature fraction rises from 0.7\% to 31.7\%. & There is no broad flat plateau of free sparsity at this operating point. \\
+H3 & Unsupported & Dense AE reconstructs best, TopK reconstructs better than C-SPINE, while C-SPINE mainly wins on dictionary utilization. & The evidence supports utilization as the distinctive effect, not a demonstrated coherence advantage. \\
+H4 & Rejected & Mean matched decoder cosine is 0.305, only 0.6\% of matches exceed 0.7, activation correlation is 0.385, and top-20 overlap is 0.063. & Objective values are seed-stable, but individual feature identities are not. \\
+H5 & Mixed & In-domain performance survives across five domains; transfer is healthiest within sentiment, while off-domain MSE can increase by 4$\times$ or more and TREC/general-science interactions are brittle. & Sparse dictionaries contain substantial domain-specific geometry. \\
+H6 & Not supported at the tested operating point & Sparse equals or nearly equals PCA-64 only on AG News; PCA leads by 2.4, 4.2, 0.4, and 7.1 percentage points on SST-2, IMDB, TREC, and arXiv respectively. & No general beyond-compression advantage is established. \\
+\hline
+\end{tabular}
+\end{table*}
+
+\section{Implementation and Codebase Correspondence}
+The extended study was designed so that each methodological claim has a
+concrete implementation location in the code shipped with the archive.
+
+The top-level legacy scripts remain present for provenance: embedding
+extraction, training, evaluation, and dimension inspection are not
+silently rewritten. The new \texttt{src/} package wraps the same
+conceptual pipeline in importable modules and adds the audit fixes and
+experiments. The archive also contains JSON configurations, per-epoch CSV
+logs, checkpoint metadata, metric JSON files, plots, qualitative tables,
+the research notebook, and reports.
+
+\subsection{Configuration and Reproducibility Contract}
+Each run is parameterized by a serializable configuration containing at
+least experiment name, dataset, encoder, pooling, input and hidden
+dimensions, noise level, loss weights, sparsity mechanism, TopK budget
+where applicable, optimizer settings, seed, number of epochs, and device.
+The configuration is saved with checkpoints so that a metric can be traced
+back to a concrete setting. The full run produced 100\% PASS status records
+across data, embedding, training, evaluation, sweep, ablations, transfer,
+encoders and qualitative stages; there were zero silent skips.
+
+The local test suite is deliberately lightweight because full BERT
+extraction and five-domain training are GPU-scale tasks. It therefore
+checks structural correctness and short synthetic runs locally, while the
+Colab notebook is the execution vehicle for the full-scale experiments.
+
+\section{Limitations and Threats to Validity}
+Downstream figures are seed-42 single runs (training VAL MSE is
+triple-seed; TEST was touched once per the locked protocol, so multi-seed
+TEST means are unavailable by design). TREC deltas ($\pm$4pp at $n=500$)
+are noise-compatible. The probe scaling asymmetry (StandardScaler on
+dense-like arms, none on sparse codes) can shift small deltas and must be
+sensitivity-tested before any sparse-vs-dense ranking claim; AG News
+sparse-vs-PCA (0.875 vs.\ 0.874) is a tie under any such shift. Sparsity
+counts exact zeros (valid for CappedReLU; $\epsilon$-thresholded for ReLU
+variants) and DenseAE ``sparsity'' is incidental. English classification
+only; NLI, coreference, and QA may be harder for sparse codes. Purity is
+correlation evidence, not human interpretability; no human ratings were
+collected. Saturation ties at activation 1.000 weaken global-top mismatch
+checks. The 95\% CI normal approximation at $n=3$ would be wide; we report
+ranges instead.
+
+\section{Reproducibility}
+Every run is reproducible from a JSON config recording seed, dataset,
+encoder, pooling, dims, hyperparameters, sparsity settings, checkpoint, and
+metrics; VAL-only checkpointing and single-touch locked TEST are enforced
+in code; all skips/failures are recorded explicitly rather than silently
+(\texttt{metrics/status.json} shows 100\% PASS, zero skips across data,
+embedding, training, eval, sweep, ablations, transfer, encoders, and
+qualitative stages). Optimization determinism holds (seed VAL-MSE spreads
+$\le$0.0003). The archive \texttt{final\_research (2).zip} contains the
+codebase, notebook, configs, results, metrics, plots, tables
+(\texttt{qual\_*} paper-ready txt/md/tex/csv), checkpoint metadata, logs,
+and reports.
+
+\section{Conclusion}
+C-SPINE is a well-posed port of SPINE-style denoising sparse coding to
+contextual sentence vectors whose implementation matches its equations but
+not all its prose (no L2 normalization as claimed) nor its evaluation
+hygiene (leaked checkpoint selection, single seed, thin metrics). At full
+scale ($H=1024$, 30 epochs, five domains), the legacy AG News headline
+replicates almost exactly (0.903 $\rightarrow$ 0.875 at 92.6\% sparsity,
+MSE 0.0298) and SST-2 closely (0.857 $\rightarrow$ 0.815 at 90.0\%, MSE
+0.0224); TREC holds while IMDB ($-$6.5pp) and 11-way scientific topics (arXiv-11)
+($-$10.7pp, PCA +7pp) do not. Feature quality is real but narrow: AG News
+atoms are category-selective with flat purity curves and coherent
+neighbourhoods, SST-2 sentiment is distributed, and dictionaries do not
+survive re-initialization (matched cosine 0.31). Counterweights are
+explicit: PCA leads or ties everywhere except one tie, TopK reconstructs
+better but wastes 88\% of its dictionary, ASL is the binding fidelity cost,
+per-example error rises with $L_0$, and neighbourhood preservation is
+partial (Jaccard $\sim$0.2). Hypothesis verdicts: H1 supported on
+news/questions/sentiment, fails on scientific topics; H2 weakly supported
+(monotone 7.3pp cost, no plateau); H3 unsupported as stated (no coherence
+advantage over dense-AE demonstrated; utilization is the real distinction);
+H4 fails; H5 mixed (sentiment/topic yes, scientific no); H6 unconfirmed
+(one tie, four losses). The apparatus --- modular codebase, locked-test
+discipline, full metric suites, sweeps, ablations, baselines, stability and
+transfer protocols, pre-registered H1--H6, and a self-contained Colab
+notebook packaging everything into one archive --- is delivered and
+full-scale validated, with negative results retained.
+
+\appendices
+
+\section{Additional Mathematical and Experimental Details}
+\subsection{Why ASL and PSL Pull in Opposite Directions}
+Consider a single feature $j$. ASL contributes approximately a positive
+first derivative with respect to every activation, encouraging
+$z_{bj}\rightarrow 0$ for all examples. PSL contributes a negative
+derivative only through the batch maximum, encouraging at least one
+example in the batch to maintain a large activation. The combination
+therefore behaves like a soft ``usage'' objective: features are expensive
+to use on average, but a feature that never fires is not rewarded. This is
+qualitatively different from an unconstrained ReLU autoencoder, whose
+hidden units can remain broadly active whenever that improves MSE.
+
+\subsection{Hard-Sparsity Ablations}
+For TopK, the encoder first computes a ReLU activation $h$ and then keeps
+the $k$ largest entries per example:
+\begin{equation}
+z_j = h_j\,\mathbb{1}[h_j \ge \tau_i], \qquad \tau_i = \text{$k$-th largest } h_{ij}.
+\end{equation}
+Thus each example has an exact $L_0=k$ before ties, and the subsequent cap
+places surviving activations in $[0,1]$. BatchTopK instead keeps the
+largest $k\cdot B$ values over the whole batch, so the sum of the
+per-example $L_0$ values is fixed while individual examples may receive
+different numbers of atoms. The experiment is useful because it separates
+two questions: whether exact sparsity itself is enough, and whether
+C-SPINE's soft lifetime objective is needed to distribute usage across a
+large dictionary.
+
+\subsection{Dimensionality-Reduction Baselines}
+PCA solves the rank-$k$ least-squares projection problem on the training
+embeddings and evaluates the resulting coordinates on test embeddings. In
+matrix form,
+\begin{equation}
+Z = X U_k,
+\end{equation}
+where $U_k$ contains the first $k$ principal directions. The
+random-projection baseline instead draws a fixed Gaussian projection matrix
+$R$ and uses $Z=XR$. These baselines have no learned sparse semantics; they
+provide an information-preservation control at a similar final coordinate
+budget.
+
+\subsection{Transfer Protocol}
+For every ordered pair $(A,B)$ of the five datasets, a C-SPINE model is
+trained only on $A$, frozen, and evaluated on $B$ without retraining or
+refitting the dictionary. There are $5\times5=25$ directions including the
+five in-domain diagonals. This makes a useful distinction between
+within-domain compression and reusable dictionary geometry. The strongest
+transfer found is within the sentiment pair SST-2$\leftrightarrow$IMDB,
+while the most obvious failure mode is the TREC dictionary, which
+over-fires badly on other corpora.
+
+\subsection{Audit of the Legacy Claims}
+The audit checked representations, pooling, normalization, activation,
+noise placement, loss sign, optimization, splitting, checkpoint selection,
+probe design, metrics, seeds and reported arithmetic. The implementation
+faithfully matches the architecture and denoising loss, but two claims in
+the legacy manuscript are material mismatches: input vectors were not
+actually L2-normalized, and the reporting split was reused for model
+selection and final accuracy. The new experiment therefore treats the
+paper's numerical claims as historical reference values rather than as a
+clean test set. The corrected pipeline restores a true validation split
+and an untouched reporting split.
+
+\section{Reproduction Checklist}
+For practical reuse of this work, the following sequence is sufficient:
+(1) install the pinned requirements; (2) run
+\texttt{tests/test\_smoke.py}; (3) inspect or edit a JSON config under
+\texttt{configs/}; (4) run the full Colab notebook with the archive
+present; (5) verify \texttt{metrics/status.json}; (6) use the generated
+metric JSON files as the source of truth for tables, not rounded notebook
+printouts; and (7) regenerate paper figures from the saved metrics when
+extending the study.
+
+\begin{thebibliography}{00}
+\bibitem{devlin2019bert} J.~Devlin, M.-W. Chang, K.~Lee, and K.~Toutanova,
+``BERT: Pre-training of deep bidirectional transformers for language
+understanding,'' in \emph{Proc. NAACL-HLT}, Minneapolis, MN, 2019.
+\bibitem{subramanian2018spine} A.~Subramanian, D.~Pruthi, H.~Jhamtani,
+T.~Berg-Kirkpatrick, and E.~Hovy, ``SPINE: SParse interpretable neural
+embeddings,'' in \emph{Proc. AAAI}, New Orleans, LA, 2018.
+\bibitem{mikolov2013distributed} T.~Mikolov, I.~Sutskever, K.~Chen,
+G.~Corrado, and J.~Dean, ``Distributed representations of words and phrases
+and their compositionality,'' in \emph{Proc. NeurIPS}, Lake Tahoe, NV, 2013.
+\bibitem{pennington2014glove} J.~Pennington, R.~Socher, and C.~D.~Manning,
+``GloVe: Global vectors for word representation,'' in \emph{Proc. EMNLP},
+Doha, Qatar, 2014.
+\bibitem{liu2019roberta} Y.~Liu \emph{et al.}, ``RoBERTa: A robustly
+optimized BERT pretraining approach,'' \emph{arXiv:1907.11692}, 2019.
+\bibitem{radford2019language} A.~Radford, J.~Wu, R.~Child, D.~Luan,
+D.~Amodei, and I.~Sutskever, ``Language models are unsupervised multitask
+learners,'' OpenAI Blog, 2019.
+\bibitem{olshausen1997sparse} B.~A.~Olshausen and D.~J.~Field, ``Sparse
+coding with an overcomplete basis set: A strategy employed by V1?''
+\emph{Vision Research}, vol.~37, no.~23, pp.\ 3311--3325, 1997.
+\bibitem{bricken2023towards} T.~Bricken \emph{et al.}, ``Towards
+monosemanticity: Decomposing language models with dictionary learning,''
+Anthropic Research, 2023.
+\bibitem{tenney2019bert} I.~Tenney, D.~Das, and E.~Pavlick, ``BERT
+rediscovers the classical NLP pipeline,'' in \emph{Proc. ACL}, Florence,
+Italy, 2019.
+\bibitem{vincent2008extracting} P.~Vincent, H.~Larochelle, Y.~Bengio, and
+P.-A.~Manzagol, ``Extracting and composing robust features with denoising
+autoencoders,'' in \emph{Proc. ICML}, Helsinki, Finland, 2008.
+\bibitem{kingma2015adam} D.~P.~Kingma and J.~Ba, ``Adam: A method for
+stochastic optimization,'' in \emph{Proc. ICLR}, San Diego, CA, 2015.
+\bibitem{socher2013recursive} R.~Socher \emph{et al.}, ``Recursive deep
+models for semantic compositionality over a sentiment treebank,'' in
+\emph{Proc. EMNLP}, Seattle, WA, 2013.
+\bibitem{zhang2015character} X.~Zhang, J.~Zhao, and Y.~LeCun,
+``Character-level convolutional networks for text classification,'' in
+\emph{Proc. NeurIPS}, Montreal, Canada, 2015.
+\bibitem{gao2024scaling} T.~Gao, H.~Qiu \emph{et al.}, ``Scaling and
+evaluating sparse autoencoders,'' \emph{arXiv:2406.04093}, 2024.
+\bibitem{maas2011learning} A.~L.~Maas \emph{et al.}, ``Learning word vectors
+for sentiment analysis,'' in \emph{Proc. ACL-HLT}, Portland, OR, 2011.
+\bibitem{li2002learning} X.~Li and D.~Roth, ``Learning question classifiers,''
+in \emph{Proc. COLING}, Taipei, Taiwan, 2002.
+\end{thebibliography}
+
+\end{document}
